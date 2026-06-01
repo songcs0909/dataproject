@@ -14,7 +14,7 @@ st.markdown("""
 """)
 
 # 2. 파일 업로드 섹션
-uploaded_file = st.file_uploader("ta_20260601093156.csv")
+uploaded_file = st.file_uploader("ta_20260601093156.csv", type=["csv"])
 
 if uploaded_file is not None:
     try:

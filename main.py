@@ -1,124 +1,134 @@
 import streamlit as st
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-import os
+from statsmodels.api import OLS, add_constant
 
-# 1. 페이지 설정 및 제목
-st.set_page_config(page_title="기온 상승 트렌드 분석 앱", layout="wide")
-st.title("🌡️ 1980년대 전후 기온 상승 트렌드 비교 분석")
+# 한글 폰트 설정 (스트림릿 클라우드 리눅스 환경 고려)
+plt.rcParams['font.family'] = 'sans-serif'
+plt.rcParams['axes.unicode_minus'] = False
+
+st.set_page_config(page_title="기온 상승 추세 분석기", layout="wide")
+
+st.title("🌡️ 1980년대 전후 기온 상승 추세 비교 분석")
 st.markdown("""
-GitHub 저장소에 저장된 기상청 기온 데이터(`ta_20260601093156.csv`)를 기반으로  
-1980년 이전과 이후의 기온 상승 속도를 자동으로 분석하고 가설을 검증합니다.
+본 웹앱은 1980년대를 기점으로 기온 상승 속도가 달라졌다는 가설을 검증하기 위해 제작되었습니다.
+기상청 장기 관측 데이터를 바탕으로 **1980년 이전**과 **1980년 이후**의 연평균 기온 변화율(회귀계수)을 비교합니다.
 """)
 
-# 데이터 파일 이름 정의
-DATA_FILENAME = "ta_20260601093156.csv"
+# 데이터 로드 함수
+@st.cache_data
+def load_data():
+    # 파일 읽기
+    df = pd.read_csv('ta_20260601093156.csv', encoding='utf-8')
+    
+    # 컬럼명 공백 제거 및 정제
+    df.columns = df.columns.str.strip()
+    
+    # 날짜 데이터의 '\t' 문자 제거 후 datetime 변환
+    df['날짜'] = df['날짜'].astype(str).str.replace('\t', '').str.strip()
+    df['날짜'] = pd.to_datetime(df['날짜'])
+    
+    # 연도 컬럼 생성
+    df['연도'] = df['날짜'].dt.year
+    
+    # 연평균 기온 계산 (결측치가 있을 수 있으므로 연도별 평균)
+    # 기상청 컬럼명 맞춤: '평균기온(℃)'
+    target_col = '평균기온(℃)'
+    if target_col not in df.columns:
+        # 혹시 모를 컬럼명 매칭 예외 처리
+        target_col = [c for c in df.columns if '평균' in c][0]
+        
+    annual_df = df.groupby('연to')[target_col].mean().reset_index()
+    annual_df.columns = ['연도', '연평균기온']
+    return annual_df
 
-# 2. 파일 존재 여부 확인 후 데이터 로드
-if os.path.exists(DATA_FILENAME):
-    try:
-        # 데이터 로드 및 전처리
-        # 기상청 데이터의 한글 인코딩(cp949) 및 공백 제거 처리
-        df = pd.read_csv(DATA_FILENAME, encoding='cp949')
-        
-        df.columns = df.columns.str.strip()
-        df['날짜'] = df['날짜'].astype(str).str.replace('\t', '').str.strip()
-        df['날짜'] = pd.to_datetime(df['날짜'])
-        df['연도'] = df['날짜'].dt.year
-        
-        # 연도별 평균 기온 계산
-        annual_df = df.groupby('연도')['평균기온(℃)'].mean().reset_index()
-        
-        # 결측치나 비정상 데이터 제외 (예: 데이터가 없는 해가 있을 경우 대비)
-        annual_df = annual_df.dropna()
+try:
+    data = load_data()
+    
+    # 데이터 분할 (1980년 기준)
+    before_1980 = data[data['연도'] < 1980]
+    after_1980 = data[data['연to'] >= 1980]
+    
+    # 사이드바 레이아웃
+    st.sidebar.header("📊 데이터 요약")
+    st.sidebar.write(f"전체 관측 기간: {data['연도'].min()}년 ~ {data['연도'].max()}년")
+    st.sidebar.write(f"1980년 이전 데이터 수: {len(before_1980)}개 연도")
+    st.sidebar.write(f"1980년 이후 데이터 수: {len(after_1980)}개 연도")
 
-        # 3. 사이드바 - 분석 기준점 설정
-        st.sidebar.header("📊 분석 설정")
-        split_year = st.sidebar.slider("트렌드를 나눌 기준 연도를 선택하세요", 
-                                       min_value=int(annual_df['연도'].min()), 
-                                       max_value=int(annual_df['연도'].max()), 
-                                       value=1980)
-        
-        # 데이터 분할
-        df_before = annual_df[annual_df['연도'] <= split_year]
-        df_after = annual_df[annual_df['연도'] > split_year]
-        
-        # 4. 주요 지표(Metrics) 시각화
-        mean_before = df_before['평균기온(℃)'].mean()
-        mean_after = df_after['평균기온(℃)'].mean()
-        diff = mean_after - mean_before
-        
-        col1, col2, col3 = st.columns(3)
-        col1.metric(label=f"{split_year}년 이전 평균 기온", value=f"{mean_before:.2f} ℃")
-        col2.metric(label=f"{split_year}년 이후 평균 기온", value=f"{mean_after:.2f} ℃")
-        col3.metric(label="평균 기온 상승 폭", value=f"+{diff:.2f} ℃", delta=f"{diff:.2f} ℃")
-        
-        st.markdown("---")
-        
-        # 5. 회귀선(Trendline) 계산 함수
-        def get_trendline(df_sub):
-            if len(df_sub) > 1:
-                slope, intercept = np.polyfit(df_sub['연도'], df_sub['평균기온(℃)'], 1)
-                return slope, intercept, slope * 10  # slope * 10 = 10년당 상승 기온
-            return 0, 0, 0
+    # 통계 분석 (선형 회귀) 계산 함수
+    def get_trend(df):
+        X = add_constant(df['연도'])
+        y = df['연평균기온']
+        model = OLS(y, X).fit()
+        slope = model.params['연도']  # 1년당 기온 상승량
+        r_squared = model.rsquared
+        return slope, r_squared
 
-        slope_b, intercept_b, decade_b = get_trendline(df_before)
-        slope_a, intercept_a, decade_a = get_trendline(df_after)
-        
-        # 6. 메인 시각화 (Plotly 차트)
-        st.subheader("📈 연도별 평균 기온 추이 및 추세선 비교")
-        
-        fig = go.Figure()
-        
-        # 전체 데이터 산점도
-        fig.add_trace(go.Scatter(x=annual_df['연도'], y=annual_df['평균기온(℃)'],
-                                 mode='markers', name='연평균 기온',
-                                 marker=dict(color='gray', opacity=0.6)))
-        
-        # 기준년 이전 추세선
-        if len(df_before) > 1:
-            fig.add_trace(go.Scatter(x=df_before['연도'], y=slope_b * df_before['연도'] + intercept_b,
-                                     mode='lines', name=f'{split_year}년 이전 추세선',
-                                     line=dict(color='blue', width=3)))
-            
-        # 기준년 이후 추세선
-        if len(df_after) > 1:
-            fig.add_trace(go.Scatter(x=df_after['연도'], y=slope_a * df_after['연도'] + intercept_a,
-                                     mode='lines', name=f'{split_year}년 이후 추세선',
-                                     line=dict(color='red', width=3)))
-            
-        # 수직 기준선
-        fig.add_vline(x=split_year, line_dash="dash", line_color="green", 
-                      annotation_text=f"{split_year}년 기준", annotation_position="top left")
-        
-        fig.update_layout(
-            xaxis_title="연도",
-            yaxis_title="평균 기온 (℃)",
-            hovermode="x unified",
-            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+    slope_before, r2_before = get_trend(before_1980)
+    slope_after, r2_after = get_trend(after_1980)
+
+    # 지표 시각화 (KPI 마크다운)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric(
+            label="📉 1980년 이전 10년당 기온 변화", 
+            value=f"+{slope_before * 10:.3f} °C",
+            delta="상승 느림"
         )
+        st.caption(f"결정계수 (R²): {r2_before:.3f}")
         
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # 7. 가설 검증 결과 요약문
-        st.subheader("💡 가설 검증 결과 요약")
-        st.markdown(f"""
-        - **{split_year}년 이전**에는 매 10년마다 평균 기온이 약 **{decade_b:.3f}℃** 상승(또는 변화)했습니다.
-        - **{split_year}년 이후**에는 매 10년마다 평균 기온이 약 **{decade_a:.3f}℃** 상승하고 있습니다.
-        """)
-        
-        if decade_a > decade_b:
-            st.success(f"🎉 **가설 지지:** {split_year}년 이후의 기온 상승 속도가 이전보다 **{decade_a - decade_b:.3f}℃/10년** 더 빠릅니다! 1980년대 이후 기온 상승이 가속화되었다는 가설을 뒷받침하는 강력한 증거입니다.")
-        else:
-            st.warning(f"⚠️ **가설과 다름:** {split_year}년 이후의 기온 상승 속도가 이전보다 가속화되었다고 보기 어렵거나 완만합니다.")
-            
-        # 8. 데이터 테이블 확인
-        with st.expander("🔍 처리된 연도별 요약 데이터 보기"):
-            st.dataframe(annual_df.style.format({'평균기온(℃)': '{:.2f}'}), use_container_width=True)
+    with col2:
+        st.metric(
+            label="📈 1980년 이후 10년당 기온 변화", 
+            value=f"+{slope_after * 10:.3f} °C",
+            delta=f"이전 대비 {((slope_after/slope_before) if slope_before != 0 else 0):.1f}배 속도",
+            delta_color="inverse"
+        )
+        st.caption(f"결정계수 (R²): {r2_after:.3f}")
 
-    except Exception as e:
-        st.error(f"데이터를 처리하는 중 오류가 발생했습니다. 오류 메시지: {e}")
-else:
-    st.error(f"❌ 저장소 내에서 `{DATA_FILENAME}` 파일을 찾을 수 없습니다. 파일명이 정확히 일치하는지 GitHub 저장소를 확인해 주세요.")
+    st.markdown("---")
+    
+    # 시각화 (그래프)
+    st.subheader("📈 기간별 기온 상승 추세선 비교 그래프")
+    
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # 전체 데이터 산점도
+    sns.scatterplot(data=data, x='연도', y='연평균기온', color='gray', alpha=0.5, ax=ax, label='연평균 기온 관측치')
+    
+    # 1980년 이전 회귀선
+    sns.regplot(data=before_1980, x='연도', y='연평균기온', scatter=False, ax=ax, 
+                color='blue', label=f'1980년 이전 추세 (10년당 +{slope_before*10:.2f}°C)')
+    
+    # 1980년 이후 회귀선
+    sns.regplot(data=after_1980, x='연도', y='연평균기온', scatter=False, ax=ax, 
+                color='red', label=f'1980년 이후 추세 (10년당 +{slope_after*10:.2f}°C)')
+    
+    # 1980년 구분선
+    ax.axvline(x=1980, color='purple', linestyle='--', alpha=0.7, label='1980년 기준선')
+    
+    ax.set_title('연도별 평균 기온 및 기간별 추세선 비교', fontsize=14, pad=15)
+    ax.set_xlabel('연도', fontsize=12)
+    ax.set_ylabel('평균 기온 (°C)', fontsize=12)
+    ax.grid(True, linestyle=':', alpha=0.6)
+    ax.legend(loc='upper left', fontsize=11)
+    
+    st.pyplot(fig)
+
+    # 결론 및 데이터 표
+    st.markdown("---")
+    st.subheader("💡 가설 검증 결과 요약")
+    if slope_after > slope_before:
+        st.success(f"**가설이 지지됩니다!** 1980년 이후 기온 상승 속도(10년당 {slope_after*10:.2f}°C)가 1980년 이전(10년당 {slope_before*10:.2f}°C)보다 더 가파르게 나타납니다.")
+    else:
+        st.warning("1980년 전후의 기온 상승 속도 차이가 가설과 다르거나 유의미하지 않습니다. 데이터를 다시 확인해보세요.")
+
+    with st.expander("정제된 연도별 데이터 보기"):
+        st.dataframe(data.sort_values(by='연도', ascending=False), use_container_width=True)
+
+except FileNotFoundError:
+    st.error("❌ `ta_20260601093156.csv` 파일을 찾을 수 없습니다. 깃허브 저장소 내 app.py와 같은 위치에 파일을 올려주세요.")
+except Exception as e:
+    st.error(f"❌ 오류가 발생했습니다: {e}")

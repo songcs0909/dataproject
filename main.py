@@ -20,7 +20,7 @@ if uploaded_file is not None:
     try:
         # 데이터 로드 및 전처리
         # 기상청 데이터는 첫 행이 한글 컬럼명이고, 날짜에 공백 문자('\t')가 포함되어 있을 수 있습니다.
-        df = pd.read_csv(uploaded_file, encoding='cp949')
+        df = pd.ta_20260601093156.csv(uploaded_file, encoding='cp949')
         
         # 컬럼명 공백 제거 및 통일
         df.columns = df.columns.str.strip()
